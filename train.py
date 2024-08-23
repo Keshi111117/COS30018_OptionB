@@ -26,7 +26,7 @@ if data is None:
 data["df"].to_csv(ticker_data_filename)
 
 # construct the model
-model = create_model(N_STEPS, len(FEATURE_COLUMNS), loss=LOSS, units=UNITS, cell=CELL, n_layers=N_LAYERS,
+model = create_model(N_STEPS, len(FEATURE_COLUMNS), loss='huber', units=UNITS, cell=CELL, n_layers=N_LAYERS,
                     dropout=DROPOUT, optimizer=OPTIMIZER, bidirectional=BIDIRECTIONAL)
 
 # Adjust the file name to end with `.weights.h5`
@@ -44,3 +44,4 @@ history = model.fit(data["X_train"], data["y_train"],
                     validation_data=(data["X_test"], data["y_test"]),
                     callbacks=[checkpointer, tensorboard],
                     verbose=1)
+

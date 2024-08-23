@@ -1,132 +1,89 @@
-import numpy as np
-
 import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+from stock_prediction import load_data  # Ensure the correct module is imported
+from parameters import *  # Import all parameters like ticker, N_STEPS, etc.
 
-from stock_prediction import create_model, load_data
-from parameters import *
-
-
-def plot_graph(test_df):
+def plot_boxplot(data, n=1, date_column='Date', price_column='Close', show_outliers=True):
     """
-    This function plots true close price along with predicted close price
-    with blue and red colors respectively
+    Plot a boxplot for stock market data over a moving window of n days.
+
+    Args:
+    data (DataFrame): A pandas DataFrame with columns for Date and Close price.
+    n (int): Size of the moving window (in days). Default is 1.
+    date_column (str): Name of the column containing date information. Default is 'Date'.
+    price_column (str): Name of the column containing price information. Default is 'Close'.
+    show_outliers (bool): Whether to show outliers in the boxplot. Default is True.
+
     """
-    plt.plot(test_df[f'true_adjclose_{LOOKUP_STEP}'], c='b')
-    plt.plot(test_df[f'adjclose_{LOOKUP_STEP}'], c='r')
-    plt.xlabel("Days")
-    plt.ylabel("Price")
-    plt.legend(["Actual Price", "Predicted Price"])
+    # Make a copy of the data to avoid modifying the original
+    df = data.copy()
+
+    # Check if the date_column is present, else try to find it
+    if date_column not in df.columns and df.index.name != date_column:
+        date_cols = df.select_dtypes(include=['datetime64']).columns
+        if len(date_cols) > 0:
+            date_column = date_cols[0]
+            print(f"Using '{date_column}' as the date column.")
+        else:
+            raise ValueError(f"Could not find a suitable date column. Please specify the correct date column name.")
+
+    if price_column not in df.columns:
+        raise ValueError(f"'{price_column}' column not found in the DataFrame. Please specify the correct price column name.")
+
+    # Set the date column as index if not already
+    if df.index.name != date_column and date_column in df.columns:
+        df.set_index(date_column, inplace=True)
+
+    # Ensure the index is datetime type
+    df.index = pd.to_datetime(df.index)
+
+    # Calculate rolling statistics
+    rolling_data = df[price_column].rolling(window=n).agg(['min', 'max', 'mean', 'median', 'std'])
+
+    # Plotting
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    bp = ax.boxplot([rolling_data['min'].dropna(), rolling_data['max'].dropna(),
+                     rolling_data['mean'].dropna(), rolling_data['median'].dropna()],
+                    labels=['Min', 'Max', 'Mean', 'Median'],
+                    patch_artist=True,  # Required for filling the boxes with colors
+                    showfliers=show_outliers)
+
+    # Customizing the plot
+    ax.set_title(f'Boxplot of {price_column} prices over a {n}-day moving window', fontsize=15)
+    ax.set_ylabel('Price', fontsize=12)
+    ax.grid(True, linestyle='--', alpha=0.7)
+
+    # Add some statistics as text
+    stats_text = f"Data range: {df.index.min().date()} to {df.index.max().date()}\n"
+    stats_text += f"Total trading days: {len(df)}\n"
+    stats_text += f"Overall price range: ${df[price_column].min():.2f} - ${df[price_column].max():.2f}"
+    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, verticalalignment='top', fontsize=10, alpha=0.7)
+
+    # Color the boxes
+    colors = ['#FFB3BA', '#BAFFC9', '#BAE1FF', '#FFFFBA']
+    for patch, color in zip(bp['boxes'], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.6)
+
+    plt.tight_layout()
     plt.show()
 
+    # Print some additional statistics
+    print(f"Average {price_column} price: ${df[price_column].mean():.2f}")
+    print(f"Median {price_column} price: ${df[price_column].median():.2f}")
+    print(f"Standard deviation of {price_column} price: ${df[price_column].std():.2f}")
 
-def get_final_df(model, data):
-    """
-    This function takes the `model` and `data` dict to
-    construct a final dataframe that includes the features along
-    with true and predicted prices of the testing dataset
-    """
-    # if predicted future price is higher than the current,
-    # then calculate the true future price minus the current price, to get the buy profit
-    buy_profit  = lambda current, pred_future, true_future: true_future - current if pred_future > current else 0
-    # if the predicted future price is lower than the current price,
-    # then subtract the true future price from the current price
-    sell_profit = lambda current, pred_future, true_future: current - true_future if pred_future < current else 0
-    X_test = data["X_test"]
-    y_test = data["y_test"]
-    # perform prediction and get prices
-    y_pred = model.predict(X_test)
-    if SCALE:
-        y_test = np.squeeze(data["column_scaler"]["adjclose"].inverse_transform(np.expand_dims(y_test, axis=0)))
-        y_pred = np.squeeze(data["column_scaler"]["adjclose"].inverse_transform(y_pred))
-    test_df = data["test_df"]
-    # add predicted future prices to the dataframe
-    test_df[f"adjclose_{LOOKUP_STEP}"] = y_pred
-    # add true future prices to the dataframe
-    test_df[f"true_adjclose_{LOOKUP_STEP}"] = y_test
-    # sort the dataframe by date
-    test_df.sort_index(inplace=True)
-    final_df = test_df
-    # add the buy profit column
-    final_df["buy_profit"] = list(map(buy_profit,
-                                    final_df["adjclose"],
-                                    final_df[f"adjclose_{LOOKUP_STEP}"],
-                                    final_df[f"true_adjclose_{LOOKUP_STEP}"])
-                                    # since we don't have profit for last sequence, add 0's
-                                    )
-    # add the sell profit column
-    final_df["sell_profit"] = list(map(sell_profit,
-                                    final_df["adjclose"],
-                                    final_df[f"adjclose_{LOOKUP_STEP}"],
-                                    final_df[f"true_adjclose_{LOOKUP_STEP}"])
-                                    # since we don't have profit for last sequence, add 0's
-                                    )
-    return final_df
-
-
-def predict(model, data):
-    # retrieve the last sequence from data
-    last_sequence = data["last_sequence"][-N_STEPS:]
-    # expand dimension
-    last_sequence = np.expand_dims(last_sequence, axis=0)
-    # get the prediction (scaled from 0 to 1)
-    prediction = model.predict(last_sequence)
-    # get the price (by inverting the scaling)
-    if SCALE:
-        predicted_price = data["column_scaler"]["adjclose"].inverse_transform(prediction)[0][0]
-    else:
-        predicted_price = prediction[0][0]
-    return predicted_price
-
-
-# load the data
+# Load the data using the load_data function
 data = load_data(ticker, N_STEPS, scale=SCALE, split_by_date=SPLIT_BY_DATE,
-                shuffle=SHUFFLE, lookup_step=LOOKUP_STEP, test_size=TEST_SIZE,
-                feature_columns=FEATURE_COLUMNS)
+                 shuffle=SHUFFLE, lookup_step=LOOKUP_STEP, test_size=TEST_SIZE,
+                 feature_columns=FEATURE_COLUMNS)
 
-# construct the model
-model = create_model(N_STEPS, len(FEATURE_COLUMNS), loss=LOSS, units=UNITS, cell=CELL, n_layers=N_LAYERS,
-                    dropout=DROPOUT, optimizer=OPTIMIZER, bidirectional=BIDIRECTIONAL)
+train_data = data['df']  # Assuming 'df' contains the complete DataFrame with all stock data
 
-# load optimal model weights from results folder
-model_path = os.path.join("results", model_name) + ".h5"
-model.load_weights(model_path)
+# Check the column names to find the correct date column
+print(train_data.columns)
 
-# evaluate the model
-loss, mae = model.evaluate(data["X_test"], data["y_test"], verbose=0)
-# calculate the mean absolute error (inverse scaling)
-if SCALE:
-    mean_absolute_error = data["column_scaler"]["adjclose"].inverse_transform([[mae]])[0][0]
-else:
-    mean_absolute_error = mae
-
-# get the final dataframe for the testing set
-final_df = get_final_df(model, data)
-# predict the future price
-future_price = predict(model, data)
-# we calculate the accuracy by counting the number of positive profits
-accuracy_score = (len(final_df[final_df['sell_profit'] > 0]) + len(final_df[final_df['buy_profit'] > 0])) / len(final_df)
-# calculating total buy & sell profit
-total_buy_profit  = final_df["buy_profit"].sum()
-total_sell_profit = final_df["sell_profit"].sum()
-# total profit by adding sell & buy together
-total_profit = total_buy_profit + total_sell_profit
-# dividing total profit by number of testing samples (number of trades)
-profit_per_trade = total_profit / len(final_df)
-# printing metrics
-print(f"Future price after {LOOKUP_STEP} days is {future_price:.2f}$")
-print(f"{LOSS} loss:", loss)
-print("Mean Absolute Error:", mean_absolute_error)
-print("Accuracy score:", accuracy_score)
-print("Total buy profit:", total_buy_profit)
-print("Total sell profit:", total_sell_profit)
-print("Total profit:", total_profit)
-print("Profit per trade:", profit_per_trade)
-# plot true/pred prices graph
-plot_graph(final_df)
-print(final_df.tail(10))
-# save the final dataframe to csv-results folder
-csv_results_folder = "csv-results"
-if not os.path.isdir(csv_results_folder):
-    os.mkdir(csv_results_folder)
-csv_filename = os.path.join(csv_results_folder, model_name + ".csv")
-final_df.to_csv(csv_filename)
+# Ensure that the column names used in plot_boxplot match those in your data
+plot_boxplot(train_data, n=5, date_column=train_data.index.name, price_column='close', show_outliers=True)
