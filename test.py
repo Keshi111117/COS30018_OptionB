@@ -1,8 +1,7 @@
+#%%
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-from stock_prediction import load_data  # Ensure the correct module is imported
-from parameters import *  # Import all parameters like ticker, N_STEPS, etc.
 
 def plot_boxplot(data, n=1, date_column='Date', price_column='Close', show_outliers=True):
     """
@@ -19,7 +18,7 @@ def plot_boxplot(data, n=1, date_column='Date', price_column='Close', show_outli
     # Make a copy of the data to avoid modifying the original
     df = data.copy()
 
-    # Check if the date_column is present, else try to find it
+    # Check if the required columns are in the DataFrame
     if date_column not in df.columns and df.index.name != date_column:
         date_cols = df.select_dtypes(include=['datetime64']).columns
         if len(date_cols) > 0:
@@ -31,7 +30,7 @@ def plot_boxplot(data, n=1, date_column='Date', price_column='Close', show_outli
     if price_column not in df.columns:
         raise ValueError(f"'{price_column}' column not found in the DataFrame. Please specify the correct price column name.")
 
-    # Set the date column as index if not already
+    # If the date column is not the index, set it as the index
     if df.index.name != date_column and date_column in df.columns:
         df.set_index(date_column, inplace=True)
 
@@ -75,15 +74,5 @@ def plot_boxplot(data, n=1, date_column='Date', price_column='Close', show_outli
     print(f"Median {price_column} price: ${df[price_column].median():.2f}")
     print(f"Standard deviation of {price_column} price: ${df[price_column].std():.2f}")
 
-# Load the data using the load_data function
-data = load_data(ticker, N_STEPS, scale=SCALE, split_by_date=SPLIT_BY_DATE,
-                 shuffle=SHUFFLE, lookup_step=LOOKUP_STEP, test_size=TEST_SIZE,
-                 feature_columns=FEATURE_COLUMNS)
-
-train_data = data['df']  # Assuming 'df' contains the complete DataFrame with all stock data
-
-# Check the column names to find the correct date column
-print(train_data.columns)
-
-# Ensure that the column names used in plot_boxplot match those in your data
-plot_boxplot(train_data, n=5, date_column=train_data.index.name, price_column='close', show_outliers=True)
+# Example usage:
+plot_boxplot(train_data, n=5, date_column='Date', price_column='close', show_outliers=True)
