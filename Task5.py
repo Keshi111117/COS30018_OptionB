@@ -1,108 +1,169 @@
 import numpy as np
-import pandas as pd
-import yfinance as yf
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error
-import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, LSTM
-from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.layers import Dense, LSTM, GRU, SimpleRNN, Dropout, Input
+from tensorflow.keras.callbacks import EarlyStopping
+import matplotlib.pyplot as plt  # Import for visualization
 
 
-# Step 1: Data Download and Preprocessing
-def download_and_prepare_multivariate_data(ticker, start_date, end_date):
-    stock_data = yf.download(ticker, start=start_date, end=end_date)
-    features = stock_data[['Open', 'High', 'Low', 'Close', 'Volume']].values
-
-    # Scale data to range [0, 1]
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(features)
-
-    X, y = [], []
-    sequence_length = 60  # Use 60 days of data to predict the next day's price
-    future_days = 10  # Predict the next 10 days
-
-    for i in range(sequence_length, len(scaled_data) - future_days):
-        X.append(scaled_data[i - sequence_length:i])
-        y.append(scaled_data[i:i + future_days, 3])  # Predict future Close prices
-
-    X, y = np.array(X), np.array(y)
-    return X, y, scaler
-
-
-# Step 2: Model Architectures
-def build_multivariate_model(input_shape):
+def build_deep_learning_model(input_shape, layer_config):
     model = Sequential()
-    model.add(LSTM(50, return_sequences=True, input_shape=input_shape))
-    model.add(LSTM(50))
-    model.add(Dense(10))  # Predict 10 future steps
+    model.add(Input(shape=input_shape))  # Explicit Input Layer
+
+    # Add the first layer
+    first_layer = layer_config[0]
+    if first_layer['type'] == 'LSTM':
+        model.add(
+            LSTM(first_layer['units'], activation=first_layer['activation'], return_sequences=(len(layer_config) > 1)))
+    elif first_layer['type'] == 'GRU':
+        model.add(
+            GRU(first_layer['units'], activation=first_layer['activation'], return_sequences=(len(layer_config) > 1)))
+    elif first_layer['type'] == 'RNN':
+        model.add(SimpleRNN(first_layer['units'], activation=first_layer['activation'],
+                            return_sequences=(len(layer_config) > 1)))
+    elif first_layer['type'] == 'Dense':
+        model.add(Dense(first_layer['units'], activation=first_layer['activation']))
+
+    # Add Dropout if specified
+    if 'dropout' in first_layer:
+        model.add(Dropout(first_layer['dropout']))
+
+    # Add subsequent layers
+    for layer in layer_config[1:]:
+        if layer['type'] == 'LSTM':
+            model.add(
+                LSTM(layer['units'], activation=layer['activation'], return_sequences=(layer != layer_config[-1])))
+        elif layer['type'] == 'GRU':
+            model.add(GRU(layer['units'], activation=layer['activation'], return_sequences=(layer != layer_config[-1])))
+        elif layer['type'] == 'RNN':
+            model.add(
+                SimpleRNN(layer['units'], activation=layer['activation'], return_sequences=(layer != layer_config[-1])))
+        elif layer['type'] == 'Dense':
+            model.add(Dense(layer['units'], activation=layer['activation']))
+
+        # Add Dropout if specified
+        if 'dropout' in layer:
+            model.add(Dropout(layer['dropout']))
+
+    # Compile the model
+    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
     return model
 
 
-# Step 3: Experimentation with Hyperparameters
-def compile_and_train_multivariate(model, X_train, y_train, X_val, y_val, epochs=20, batch_size=32,
-                                   learning_rate=0.001):
-    model.compile(optimizer=Adam(learning_rate=learning_rate), loss='mean_squared_error')
-    history = model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, validation_data=(X_val, y_val))
-    return history
+def multistep_prediction(model, data, k):
+    """
+    Perform multistep prediction for k timesteps into the future.
+
+    Parameters:
+    - model: Trained model.
+    - data: The last data sequence used to make the first prediction.
+    - k: Number of future timesteps to predict.
+
+    Returns:
+    - predictions: Array of predicted values for k timesteps.
+    """
+    predictions = []
+    current_input = data.copy()
+
+    for _ in range(k):
+        next_prediction = model.predict(current_input.reshape(1, *current_input.shape))[0, 0]
+        predictions.append(next_prediction)
+        # Update the input for the next prediction
+        current_input = np.roll(current_input, -1, axis=0)
+        current_input[-1, -1] = next_prediction  # Assuming last column is the feature to predict
+
+    return np.array(predictions)
 
 
-# Step 4: Training and Evaluation
-def evaluate_multivariate_model(model, X_test, y_test, scaler):
-    predictions = model.predict(X_test)
+def plot_training_history(history):
+    """
+    Plots the training and validation loss over epochs.
 
-    # Inverse transform only the relevant columns (the predicted Close prices)
-    # Create an array of the same shape as the input but filled with zeros except for the Close price column
-    zeros = np.zeros((predictions.shape[0], scaler.n_features_in_))
-
-    # Insert the predictions and y_test back into the zero-filled arrays
-    zeros[:, 3] = predictions[:, 0]
-    predictions = scaler.inverse_transform(zeros)[:, 3]
-
-    zeros[:, 3] = y_test[:, 0]
-    y_test = scaler.inverse_transform(zeros)[:, 3]
-
-    # Calculate and print MSE for each predicted step
-    mse = mean_squared_error(y_test, predictions)
-    print(f'Mean Squared Error: {mse}')
-
-    # Visualize the prediction vs actual for the first test case
+    Parameters:
+    - history: The history object returned by model.fit()
+    """
     plt.figure(figsize=(10, 6))
-    plt.plot(y_test[:10], label='True Price')
-    plt.plot(predictions[:10], label='Predicted Price')
+
+    # Plot training loss
+    plt.plot(history.history['loss'], label='Training Loss')
+
+    # Plot validation loss
+    plt.plot(history.history['val_loss'], label='Validation Loss')
+
+    # Add labels and title
+    plt.title('Training and Validation Loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
     plt.legend()
     plt.show()
 
 
-# Main Function to Run the Experiment
-def main():
-    ticker = 'AMZN'
-    start_date = '2018-01-01'
-    end_date = '2023-01-01'
+# Example usage: Let's experiment with different configurations
+input_shape = (10, 5)  # Example input shape (10 timesteps, 5 features)
 
-    X, y, scaler = download_and_prepare_multivariate_data(ticker, start_date, end_date)
+# Configurations for experiments
+experiments = {
+    "LSTM_1layer": [
+        {'type': 'LSTM', 'units': 50, 'activation': 'tanh', 'dropout': 0.2},
+        {'type': 'Dense', 'units': 1, 'activation': 'relu'}  # Changed to 1 unit
+    ],
+    "GRU_2layers": [
+        {'type': 'GRU', 'units': 50, 'activation': 'tanh', 'dropout': 0.2},
+        {'type': 'GRU', 'units': 50, 'activation': 'tanh', 'dropout': 0.2},
+        {'type': 'Dense', 'units': 1, 'activation': 'relu'}  # Changed to 1 unit
+    ],
+    "RNN_3layers": [
+        {'type': 'RNN', 'units': 50, 'activation': 'tanh', 'dropout': 0.2},
+        {'type': 'RNN', 'units': 50, 'activation': 'tanh'},
+        {'type': 'RNN', 'units': 30, 'activation': 'tanh'},
+        {'type': 'Dense', 'units': 1, 'activation': 'relu'}  # Changed to 1 unit
+    ]
+}
 
-    # Split into training and validation sets
-    split_ratio = 0.8
-    train_size = int(len(X) * split_ratio)
-    X_train, X_val, y_train, y_val = X[:train_size], X[train_size:], y[:train_size], y[train_size:]
+# Hyperparameters for experiments
+epochs_list = [20, 50]  # Number of epochs
+batch_size_list = [16, 32]  # Batch sizes
 
-    # Build and train the model
-    multivariate_model = build_multivariate_model(X_train.shape[1:])
+# Data (Placeholder for real data)
+X_train = tf.random.normal((500, 10, 5))  # Example data (500 samples, 10 timesteps, 5 features)
+y_train = tf.random.normal((500, 1))  # Example target data (500 samples, 1 target per sample)
 
-    print("Training Multivariate LSTM model...")
-    compile_and_train_multivariate(multivariate_model, X_train, y_train, X_val, y_val, epochs=20, batch_size=32,
-                                   learning_rate=0.001)
+X_val = tf.random.normal((100, 10, 5))  # Example validation data
+y_val = tf.random.normal((100, 1))  # Example validation targets (1 target per sample)
 
-    # Evaluate the model
-    print("Evaluating Multivariate LSTM model...")
-    evaluate_multivariate_model(multivariate_model, X_val, y_val, scaler)
+# Multistep prediction parameters
+k_steps = 5  # Number of future steps to predict
+last_data_sample = X_val[-1]  # Assuming the last validation sample for prediction
 
+# Loop through experiments
+for experiment_name, layer_config in experiments.items():
+    for epochs in epochs_list:
+        for batch_size in batch_size_list:
+            print(f"Experiment: {experiment_name}, Epochs: {epochs}, Batch Size: {batch_size}")
 
-if __name__ == "__main__":
-    main()
+            # Build the model
+            model = build_deep_learning_model(input_shape, layer_config)
+            model.summary()
 
+            # Train the model
+            early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+            history = model.fit(
+                X_train, y_train,
+                validation_data=(X_val, y_val),
+                epochs=epochs,
+                batch_size=batch_size,
+                callbacks=[early_stopping],
+                verbose=1
+            )
 
+            # Plot the training and validation loss
+            plot_training_history(history)
 
+            # Print the final validation loss and MAE
+            final_val_loss, final_val_mae = model.evaluate(X_val, y_val)
+            print(f"Final Validation Loss: {final_val_loss}, Final Validation MAE: {final_val_mae}")
 
+            # Perform multistep prediction
+            predicted_future = multistep_prediction(model, last_data_sample, k_steps)
+            print(f"Predicted values for the next {k_steps} timesteps: {predicted_future}")
+            print("--------------------------------------------------\n")
